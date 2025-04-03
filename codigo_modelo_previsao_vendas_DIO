@@ -1,0 +1,121 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# # 0. Reconhecendo manualmente Assinatura, grupo de recursos e workspace para trabalhar.
+
+# In[7]:
+
+
+from azureml.core import Workspace
+
+# Preencha com suas informações (encontre no portal do Azure)
+subscription_id = 'sua_assinatura_DIO'
+resource_group = 'resource_g_sorvete_DIO'
+workspace_name = 'workspace_sorvete_DIO'
+
+ws = Workspace(subscription_id, resource_group, workspace_name)
+print("Workspace:", ws.name)
+
+
+# # 1. Carregue o Dataset "sorvete_dio_dados"
+
+# In[8]:
+
+
+from azureml.core import Dataset
+
+# Carrega o dataset (usando o workspace já autenticado)
+dataset = Dataset.get_by_name(workspace=ws, name='sorvete_dio_dados')
+df = dataset.to_pandas_dataframe()
+
+# Renomeia a coluna (se ainda estiver como "Data_b")
+df = df.rename(columns={'Data_b': 'Data'})
+
+# Mostra as primeiras linhas
+df.head()
+
+
+# # 2. Pré-processamento Final
+
+# In[9]:
+
+
+import pandas as pd
+
+# Converte a coluna de data e cria features extras
+df['Data'] = pd.to_datetime(df['Data'])
+df['Dia_da_Semana'] = df['Data'].dt.dayofweek
+df['Fim_de_Semana'] = df['Dia_da_Semana'].apply(lambda x: 1 if x >= 5 else 0)
+
+# Verifica os dados
+print("Colunas disponíveis:", df.columns.tolist())
+print("\nAmostra dos dados:\n", df.head())
+
+
+# # 3. Treine um Modelo Simples (Random Forest)
+
+# In[10]:
+
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+
+# Separa features (X) e target (y)
+X = df[['Temperatura', 'Dia_da_Semana', 'Fim_de_Semana']]
+y = df['Vendas']
+
+# Divide em treino/teste
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Treina o modelo
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# Avalia
+print("Acurácia (R²):", model.score(X_test, y_test).round(2))
+
+
+# # 4. Faça Previsões para os Próximos 30 Dias
+
+# In[11]:
+
+
+import numpy as np
+
+# Cria datas futuras (30 dias após a última data do dataset)
+future_dates = pd.date_range(start=df['Data'].max() + pd.Timedelta(days=1), periods=30)
+future_df = pd.DataFrame({
+    'Data': future_dates,
+    'Temperatura': np.linspace(20, 35, 30),  # Temperaturas simuladas
+    'Dia_da_Semana': future_dates.dayofweek,
+    'Fim_de_Semana': [1 if d >= 5 else 0 for d in future_dates.dayofweek]
+})
+
+# Gera previsões
+future_df['Vendas_Previstas'] = model.predict(future_df[['Temperatura', 'Dia_da_Semana', 'Fim_de_Semana']])
+
+# Mostra o resultado
+future_df[['Data', 'Temperatura', 'Vendas_Previstas']]
+
+
+# # Criando EndPoint
+
+# In[13]:
+
+
+from azureml.core import Model  # Adicione esta importação!
+import joblib
+
+# 1. Salve o modelo localmente
+joblib.dump(model, 'modelo_sorvete.pkl')
+
+# 2. Registre no Azure ML (agora com a classe Model importada)
+model_azure = Model.register(
+    workspace=ws,
+    model_name="modelo_previsao_sorvetes",  # Nome amigável
+    model_path="modelo_sorvete.pkl",         # Caminho do arquivo
+    description="Modelo para prever vendas de sorvete baseado na temperatura"
+)
+
+print(f"Modelo registrado com ID: {model_azure.id}")
+
